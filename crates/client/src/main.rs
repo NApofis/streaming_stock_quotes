@@ -7,7 +7,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
-use crate::udp_server::QuoteReader;
+use crate::udp_server::ClientReader;
 use anyhow::{Result, bail};
 use clap::Parser;
 use std::path::PathBuf;
@@ -56,6 +56,8 @@ fn read_tickers(file_name: &PathBuf) -> Result<HashSet<String>, ErrType> {
 }
 
 fn main() -> Result<()> {
+    env_logger::init();
+
     let cli = Cli::parse();
 
     let tickers = match read_tickers(&cli.tickers_file) {
@@ -121,9 +123,9 @@ fn main() -> Result<()> {
         Ok(stoper) => stoper,
         Err(e) => bail!(e.to_string()),
     };
-    env_logger::init();
 
-    match QuoteReader::new(cli.server_ip, cli.server_port, tickers, stoper) {
+
+    match ClientReader::new(server, tickers, stoper) {
         Ok(mut reader) => {
             match reader.ping_sender() {
                 Ok(_) => {}

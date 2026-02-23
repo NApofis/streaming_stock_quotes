@@ -1,11 +1,14 @@
 use std::io::{BufRead, Write, BufReader};
 use std::net::TcpStream;
+use std::sync::Arc;
+use crossbeam_channel::Receiver;
 use common_lib::STREAM_REQUEST;
 use common_lib::errors::ErrType;
 use common_lib::errors::ErrType::ConnectionError;
-use crate::udp_monitoring::UdpSender;
+use common_lib::stock_quote::StockQuote;
+use crate::udp_monitoring::ServerWriter;
 
-pub fn handle_client(stream: TcpStream) -> Result<UdpSender, ErrType>{
+pub fn handle_client(stream: TcpStream, receiver: Receiver<Arc<Vec<StockQuote>>>) -> Result<ServerWriter, ErrType>{
     let mut writer = match stream.try_clone() {
         Ok(stream) => stream,
         Err(_) => {
@@ -18,7 +21,7 @@ pub fn handle_client(stream: TcpStream) -> Result<UdpSender, ErrType>{
         let _ = writer.flush();
     };
     let mut reader = BufReader::new(stream);
-    let sender: UdpSender;
+    let sender: ServerWriter;
     let mut line = String::new();
 
     write("Вы подключились к бирже!\n");
@@ -69,7 +72,7 @@ pub fn handle_client(stream: TcpStream) -> Result<UdpSender, ErrType>{
                                 } else {
                                     log::debug!("Пришел корректный запрос {}", input);
                                     write("OK\n");
-                                    sender = UdpSender::start(address, tickers_vec)?;
+                                    sender = ServerWriter::start(address, tickers_vec, receiver)?;
                                     break;
                                 }
                             } else {

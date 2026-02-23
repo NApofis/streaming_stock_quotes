@@ -10,7 +10,7 @@ use std::io::{BufRead, BufReader, ErrorKind};
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use common_lib::errors::ErrType;
-use crate::udp_monitoring::UdpSender;
+use crate::udp_monitoring::ServerWriter;
 
 fn read_tickers(file_name: &str) -> Result<HashSet<String>, ErrType> {
     let mut tickers = HashSet::new();
@@ -51,7 +51,7 @@ fn main() -> io::Result<()> {
 
     let mut stocks = stock_quotes_handler::QuoteHandler::new(&tickers);
 
-    let mut senders: LinkedList<UdpSender> = LinkedList::new();
+    let mut senders: LinkedList<ServerWriter> = LinkedList::new();
 
     for stream in listener.incoming() {
         if stoper.load(Ordering::Acquire) {
@@ -60,7 +60,7 @@ fn main() -> io::Result<()> {
         }
         match stream {
             Ok(stream) => {
-                match tcp_server::handle_client(stream) {
+                match tcp_server::handle_client(stream, stocks.get_receiver()) {
                     Ok(sender) => {
                         senders.push_back(sender);
                     },

@@ -3,14 +3,14 @@ use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, Ordering};
 use common_lib::errors::ErrType;
 use common_lib::stock_quote::StockQuote;
-use common_lib::{PING_REQUEST, DATA_REQUEST};
+use common_lib::{PING_REQUEST, DATA_REQUEST, PONG_REQUEST};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 use std::io;
 
 
-pub struct QuoteReader {
+pub struct ClientReader {
     socket: UdpSocket,
     tickers: HashSet<String>,
     address: String,
@@ -19,16 +19,15 @@ pub struct QuoteReader {
     stop_without_pong: Arc<AtomicBool>,
 }
 
-impl QuoteReader {
-    pub fn new(addr: String, port: u16, tickers: HashSet<String>, stop: Arc<AtomicBool>) -> Result<Self, ErrType> {
-        let address = format!("{}:{}", addr, port);
+impl ClientReader {
+    pub fn new(address: String, tickers: HashSet<String>, stop: Arc<AtomicBool>) -> Result<Self, ErrType> {
         let Ok(socket) = UdpSocket::bind(address.clone()) else {
-            log::error!("Не удалось запусить udp сервер на сокете {addr}:{port}");
+            log::error!("Не удалось запусить udp сервер на сокете {address}");
             return Err(ErrType::ConnectionError("Не удолось запусить upd сервер".to_string()));
         };
         let Ok(_) = socket.set_nonblocking(true) else {
-            log::error!("Не удалось сделать upd сокет c {} не блокирующимся", addr);
-            return Err(ErrType::ConnectionError(format!("Не удалось сделать upd сокет c {} не блокирующимся", addr)));
+            log::error!("Не удалось сделать upd сокет c {} не блокирующимся", address.clone());
+            return Err(ErrType::ConnectionError(format!("Не удалось сделать upd сокет c {} не блокирующимся", address)));
         };
 
         Ok( Self {
@@ -58,13 +57,13 @@ impl QuoteReader {
             }
 
             match self.socket.recv_from(&mut buf) {
-                Ok((n, _)) => {
-
+                Ok((n, from)) => {
+                    let t = String::from_utf8_lossy(&buf[..n]);
                     if &buf[..DATA_REQUEST.len()] == DATA_REQUEST {
                         log::error!("От сервера пришел ответ {}", String::from_utf8_lossy(&buf[..n]));
                         deadline = Instant::now() + TIMEOUT;
 
-                    } else if &buf[..PING_REQUEST.len()] == PING_REQUEST {
+                    } else if &buf[..PONG_REQUEST.len()] == PONG_REQUEST {
                         log::error!("От сервера пришел ответ {}", String::from_utf8_lossy(&buf[..n]));
                         self.ping_status.store(false, Ordering::Release);
                     }
@@ -120,14 +119,14 @@ impl QuoteReader {
 
         thread::spawn(move || {
             loop {
-                if ping_send.load(Ordering::Acquire) {
-                    log::error!("Сервер {} не прислал PONG в течении 1 секунды. Соедине будет переоткрыто.", address);
-                    copy_stop_without_pong.store(true, Ordering::Release);
-                    break
-                } else if copy_stop.load(Ordering::Acquire) {
-                    log::info!("Завершаем отправлять ping запросы");
-                    break
-                };
+                // if ping_send.load(Ordering::Acquire) {
+                //     log::error!("Сервер {} не прислал PONG в течении 1 секунды. Соедине будет переоткрыто.", address);
+                //     copy_stop_without_pong.store(true, Ordering::Release);
+                //     break
+                // } else if copy_stop.load(Ordering::Acquire) {
+                //     log::info!("Завершаем отправлять ping запросы");
+                //     break
+                // };
 
                 let Ok(_) = copy_socket.send_to(PING_REQUEST, address.clone()) else {
                     log::error!("Не удалось отправить PING сообщение на адрес {}", address);
@@ -135,7 +134,7 @@ impl QuoteReader {
                 };
 
                 ping_send.store(true, Ordering::Release);
-                thread::sleep(Duration::from_secs(1000));
+                thread::sleep(Duration::from_secs(1));
             }
         });
         Ok(())

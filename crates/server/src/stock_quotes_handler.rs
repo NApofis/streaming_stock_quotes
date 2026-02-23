@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{thread, thread::JoinHandle};
 use std::sync::atomic::{AtomicBool, Ordering};
-use crossbeam_channel::{unbounded, Receiver};
+use crossbeam_channel::{unbounded, Receiver, Sender};
 use common_lib::errors::ErrType::NoAccess;
 
 const POPULAR_QUOTES: [&str; 3] = ["AAPL", "MSFT", "TSLA"];
@@ -14,7 +14,8 @@ const POPULAR_QUOTES: [&str; 3] = ["AAPL", "MSFT", "TSLA"];
 
 pub struct QuoteHandler {
     stopper: Arc<AtomicBool>,
-    join_handle: Option<JoinHandle<()>>
+    join_handle: Option<JoinHandle<()>>,
+    receiver: Receiver<Arc<Vec<StockQuote>>>
 }
 
 impl QuoteHandler {
@@ -29,9 +30,12 @@ impl QuoteHandler {
     pub fn new(tickers: &HashSet<String>) -> QuoteHandler {
         let stopper = Arc::new(AtomicBool::new(false));
         let stopper_clone = stopper.clone();
+        let (sender, receiver) = unbounded::<Arc<Vec<StockQuote>>>();
+
         Self {
             stopper,
-            join_handle: Some(Self::start_update_quotes(stopper_clone, tickers))
+            join_handle: Some(Self::start_update_quotes(stopper_clone, tickers, sender)),
+            receiver
         }
     }
 
@@ -43,7 +47,7 @@ impl QuoteHandler {
     ///
     /// returns: JoinHandle<()> - держатель потока с помощью которого можно будет дождаться корректного завершения потока
     ///
-    fn start_update_quotes(stopper: Arc<AtomicBool>, tickers: &HashSet<String>) -> JoinHandle<()> {
+    fn start_update_quotes(stopper: Arc<AtomicBool>, tickers: &HashSet<String>, sender: Sender<Arc<Vec<StockQuote>>>) -> JoinHandle<()> {
         let mut stocks: Vec<StockQuote> = Vec::new();
         for ticker in tickers {
             stocks.push(Self::generate_quote(ticker, None));
@@ -53,7 +57,6 @@ impl QuoteHandler {
         thread::spawn(move || {
             log::info!("Запущен поток обновления котировок");
 
-            let (sender, _) = unbounded::<Arc<Vec<StockQuote>>>();
             loop {
                 if stopper.load(Ordering::Acquire) {
                     log::info!("Остановлен поток обновления котировок");
@@ -103,9 +106,8 @@ impl QuoteHandler {
         Ok(())
     }
     
-    pub fn get_receiver() -> Receiver<Arc<Vec<StockQuote>>> {
-        let (_, rx) = unbounded::<Arc<Vec<StockQuote>>>();
-        rx
+    pub fn get_receiver(&self) -> Receiver<Arc<Vec<StockQuote>>> {
+        self.receiver.clone()
     }
 
     /// Генерирует новое значение для котировки. Изначально берется рандомная цена, а в последующих вызовах

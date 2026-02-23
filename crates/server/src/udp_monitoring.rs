@@ -9,16 +9,15 @@ use crossbeam_channel::{Receiver, RecvTimeoutError};
 use common_lib::errors::ErrType::NoAccess;
 use common_lib::stock_quote::StockQuote;
 use common_lib::{DATA_REQUEST, PONG_REQUEST, PING_REQUEST};
-use crate::stock_quotes_handler::QuoteHandler;
 
-pub struct UdpSender {
+pub struct ServerWriter {
     stop: Arc<AtomicBool>,
     addr: String,
     join_handle: Option<JoinHandle<()>>
 }
 
-impl UdpSender {
-    pub fn start(addr: String, tickers: Vec<String>) -> Result<Self, ErrType> {
+impl ServerWriter {
+    pub fn start(addr: String, tickers: Vec<String>, receiver: Receiver<Arc<Vec<StockQuote>>>) -> Result<Self, ErrType> {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_clone = stop.clone();
 
@@ -29,7 +28,7 @@ impl UdpSender {
         };
 
         result.join_handle = Some(thread::spawn(move || {
-            Self::send(stop_clone, addr.clone(), tickers, QuoteHandler::get_receiver())
+            Self::send(stop_clone, addr.clone(), tickers, receiver)
         }));
 
         Ok(result)
@@ -70,8 +69,8 @@ impl UdpSender {
             }
             if Instant::now() - ping_time > Duration::from_secs(5) {
                 log::warn!("Разрываем соединение с {} потому что не получали ping больше 5 сек", addr);
-                drop(socket);
-                break;
+                // drop(socket);
+                // break;
             }
 
             match receiver.recv_timeout(Duration::from_millis(50)) {
@@ -95,7 +94,9 @@ impl UdpSender {
             }
 
             match socket.recv_from(&mut buf) {
-                Ok((_, from)) => {
+                Ok((n, from)) => {
+                    let t = String::from_utf8_lossy(&buf[..n]);
+
                     if from.to_string() == addr && &buf[..PING_REQUEST.len()] == PING_REQUEST {
                         log::info!("Клиент {} прислал PING сообщение", addr);
                         let _ = socket.send_to(PONG_REQUEST, from);
