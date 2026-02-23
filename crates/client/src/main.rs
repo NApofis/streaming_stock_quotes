@@ -101,7 +101,8 @@ fn main() -> Result<()> {
         bail!("Не удалось прочитать приветственное сообщение сервера")
     };
 
-    let request = format!("{} udp://127.0.0.1:{} {}\n", common_lib::STREAM_REQUEST, cli.udp_port, tickers_join);
+    let address_udp = format!("127.0.0.1:{}", &cli.udp_port);
+    let request = format!("{} udp://{} {}\n", common_lib::STREAM_REQUEST, address_udp, tickers_join);
     let Ok(_) = stream.write_all(request.as_bytes()) else {
         bail!("Не удалось отправить сообщение {} серверу", request)
     };
@@ -125,7 +126,7 @@ fn main() -> Result<()> {
     };
 
 
-    match ClientReader::new(server, tickers, stoper) {
+    match ClientReader::new(address_udp, tickers, stoper) {
         Ok(mut reader) => {
             match reader.ping_sender() {
                 Ok(_) => {}

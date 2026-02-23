@@ -21,9 +21,12 @@ pub struct ClientReader {
 
 impl ClientReader {
     pub fn new(address: String, tickers: HashSet<String>, stop: Arc<AtomicBool>) -> Result<Self, ErrType> {
-        let Ok(socket) = UdpSocket::bind(address.clone()) else {
-            log::error!("Не удалось запусить udp сервер на сокете {address}");
-            return Err(ErrType::ConnectionError("Не удолось запусить upd сервер".to_string()));
+        let socket = match UdpSocket::bind(address.clone()) {
+            Ok(socket) => socket,
+            Err(e) => {
+                log::error!("Не удалось запусить udp сервер на сокете {address}. {e}");
+                return Err(ErrType::ConnectionError("Не удолось запусить upd сервер".to_string()));
+            }
         };
         let Ok(_) = socket.set_nonblocking(true) else {
             log::error!("Не удалось сделать upd сокет c {} не блокирующимся", address.clone());
