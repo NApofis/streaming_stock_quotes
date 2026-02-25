@@ -1,21 +1,21 @@
 use common_lib::errors::ErrType;
-use common_lib::stock_quote::StockQuote;
-use rand::Rng;
-use std::collections::HashSet;
-use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use std::{thread, thread::JoinHandle};
-use std::sync::atomic::{AtomicBool, Ordering};
-use crossbeam_channel::{unbounded, Receiver, Sender};
 use common_lib::errors::ErrType::NoAccess;
+use common_lib::stock_quote::StockQuote;
+use crossbeam_channel::{Receiver, Sender, unbounded};
+use rand::Rng;
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, RwLock};
+use std::time::{SystemTime, UNIX_EPOCH};
+use std::{thread, thread::JoinHandle};
 
 const POPULAR_QUOTES: [&str; 3] = ["AAPL", "MSFT", "TSLA"];
-
+type SubsType = Arc<RwLock<HashMap<String, Sender<Arc<Vec<StockQuote>>>>>>;
 
 pub struct QuoteHandler {
     stopper: Arc<AtomicBool>,
     join_handle: Option<JoinHandle<()>>,
-    receiver: Receiver<Arc<Vec<StockQuote>>>
+    subscribers: SubsType,
 }
 
 impl QuoteHandler {
@@ -30,12 +30,16 @@ impl QuoteHandler {
     pub fn new(tickers: &HashSet<String>) -> QuoteHandler {
         let stopper = Arc::new(AtomicBool::new(false));
         let stopper_clone = stopper.clone();
-        let (sender, receiver) = unbounded::<Arc<Vec<StockQuote>>>();
+        let subscribers = Arc::new(RwLock::new(HashMap::new()));
 
         Self {
             stopper,
-            join_handle: Some(Self::start_update_quotes(stopper_clone, tickers, sender)),
-            receiver
+            join_handle: Some(Self::start_update_quotes(
+                stopper_clone,
+                tickers,
+                subscribers.clone(),
+            )),
+            subscribers,
         }
     }
 
@@ -47,12 +51,15 @@ impl QuoteHandler {
     ///
     /// returns: JoinHandle<()> - держатель потока с помощью которого можно будет дождаться корректного завершения потока
     ///
-    fn start_update_quotes(stopper: Arc<AtomicBool>, tickers: &HashSet<String>, sender: Sender<Arc<Vec<StockQuote>>>) -> JoinHandle<()> {
+    fn start_update_quotes(
+        stopper: Arc<AtomicBool>,
+        tickers: &HashSet<String>,
+        subscribers: SubsType,
+    ) -> JoinHandle<()> {
         let mut stocks: Vec<StockQuote> = Vec::new();
         for ticker in tickers {
             stocks.push(Self::generate_quote(ticker, None));
         }
-        let mut counter: i32 = 0;
 
         thread::spawn(move || {
             log::info!("Запущен поток обновления котировок");
@@ -70,22 +77,23 @@ impl QuoteHandler {
                     quote.timestamp = new.timestamp;
                 }
 
-                match sender.try_send(Arc::new(stocks.clone())) {
-                    Ok(_) => {
-                        counter = 0
-                    },
-                    Err(_) => {
-                        if counter > 10 {
-                            counter = 0;
-                            log::debug!(
-                                "Не удалось отправить данные котировок в канал"
-                            );
-                        }
-                        counter += 1;
+                let data = Arc::new(stocks.clone());
+                match subscribers.read() {
+                    Ok(subscribers) => {
+                        subscribers
+                            .iter()
+                            .for_each(|(_, s)| match s.send(data.clone()) {
+                                Ok(_) => {}
+                                Err(e) => {
+                                    log::error!("{:?}", e)
+                                }
+                            })
                     }
-                }
-
-                thread::sleep(Duration::new(1, 0));
+                    Err(_) => {
+                        log::debug!("Не удалось отправить данные котировок в канал");
+                    }
+                };
+                thread::sleep(common_lib::QUOTE_GENERATOR_PERIOD);
             }
         })
     }
@@ -99,15 +107,40 @@ impl QuoteHandler {
                 Ok(()) => (),
                 Err(_) => {
                     log::error!("Ошибка завершения работы потока обновления котировок");
-                    return Err(NoAccess("Не удалось завершить работу потока обновляющего значения котировок".to_string()));
+                    return Err(NoAccess(
+                        "Не удалось завершить работу потока обновляющего значения котировок"
+                            .to_string(),
+                    ));
                 }
             }
         }
         Ok(())
     }
-    
-    pub fn get_receiver(&self) -> Receiver<Arc<Vec<StockQuote>>> {
-        self.receiver.clone()
+
+    /// Создаем новое канал по которому будем отправлять котировки
+    pub fn create_channel(&self, address: &String) -> Option<Receiver<Arc<Vec<StockQuote>>>> {
+        match self.subscribers.write() {
+            Ok(mut subscribers) => {
+                let (sender, receiver) = unbounded::<Arc<Vec<StockQuote>>>();
+                subscribers.insert(address.to_string(), sender);
+                Some(receiver)
+            }
+            Err(_) => {
+                log::error!("Не удалось создать канал для передачи котировок");
+                None
+            }
+        }
+    }
+
+    pub fn remove_channel(&self, address: &String) {
+        match self.subscribers.write() {
+            Ok(mut subscribers) => {
+                subscribers.remove(address);
+            }
+            Err(_) => {
+                log::error!("Не удалось удалить канал для передачи котировок");
+            }
+        }
     }
 
     /// Генерирует новое значение для котировки. Изначально берется рандомная цена, а в последующих вызовах
@@ -155,7 +188,7 @@ impl QuoteHandler {
             timestamp: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
-                .as_millis() as u64,
+                .as_millis() as i64,
         }
     }
 }
@@ -166,11 +199,11 @@ impl QuoteHandler {
 //     use std::thread::sleep;
 //     use std::time::Duration;
 //     use crate::stock_quotes_handler::QuoteHandler;
-// 
+//
 //     fn get_tickers() -> HashSet<String> {
 //         HashSet::from(["AAPL".to_string(), "MSFT".to_string(), "NEW".to_string()])
 //     }
-// 
+//
 //     #[test]
 //     fn test_start_stop_generate_quote() {
 //         let (obj, thr) = QuoteHandler::new(&get_tickers());
@@ -180,27 +213,27 @@ impl QuoteHandler {
 //             assert!(reader.stocks.iter().find(|s| s.ticker.as_str() == "MSFT").is_some());
 //             assert!(reader.stocks.iter().find(|s| s.ticker.as_str() == "NEWWW").is_none());
 //         }
-// 
+//
 //         let mut tr = get_tickers();
 //         tr.insert(String::from("GGL"));
 //         let value = obj.read(&tr).unwrap();
-// 
+//
 //         sleep(Duration::from_secs(2));
 //         let value2 = obj.read(&tr).unwrap();
-// 
+//
 //         assert_eq!(value.len(), 3);
 //         assert_eq!(value.len(), value2.len());
 //         assert_eq!(value[0].ticker, value2[0].ticker);
 //         assert_eq!(value[1].ticker, value2[1].ticker);
 //         assert_eq!(value[2].ticker, value2[2].ticker);
-// 
+//
 //         assert_ne!(value[0].timestamp, value2[0].timestamp);
 //         assert_ne!(value[1].timestamp, value2[1].timestamp);
 //         assert_ne!(value[2].timestamp, value2[2].timestamp);
-// 
+//
 //         assert_ne!(value[0].price, value2[0].price);
 //         assert_ne!(value[0].volume, value2[0].volume);
-// 
+//
 //         obj.stop();
 //         let empty_result = obj.read(&tr).unwrap();
 //         assert!(empty_result.is_empty());

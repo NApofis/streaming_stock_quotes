@@ -1,7 +1,9 @@
-use std::num::{ParseFloatError, ParseIntError};
-use std::io::ErrorKind;
+use crate::errors::ErrType::{
+    ConnectionError, CtrlcError, NoAccess, NotSupported, ParseError, ReadError, RequestError,
+};
 use std::fmt;
-use crate::errors::ErrType::{ConnectionError, CtrlcError, NoAccess, NotSupported, ParseError, ReadError, RequestError};
+use std::io::ErrorKind;
+use std::num::{ParseFloatError, ParseIntError};
 
 #[derive(Debug)]
 pub enum ErrType {
@@ -16,7 +18,7 @@ pub enum ErrType {
 
 impl fmt::Display for ErrType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self { 
+        match self {
             NotSupported(s) => write!(f, "Not supported({})", s),
             ParseError(s) => write!(f, "ParseError({})", s),
             NoAccess(s) => write!(f, "NoAccess({})", s),

@@ -1,23 +1,26 @@
 mod stock_quotes_handler;
 mod tcp_server;
-mod udp_monitoring;
+mod udp_server_writer;
 
-use std::collections::{HashSet, LinkedList};
-use std::{env, io, thread};
-use std::net::TcpListener;
+use crate::stock_quotes_handler::QuoteHandler;
+use crate::udp_server_writer::ServerWriter;
+use common_lib::TCP_CONNECTION_WAIT_PERIOD;
+use common_lib::errors::ErrType;
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader, ErrorKind};
+use std::net::TcpListener;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
-use common_lib::errors::ErrType;
-use crate::udp_monitoring::ServerWriter;
+use std::{env, io, thread};
 
-fn read_tickers(file_name: &str) -> Result<HashSet<String>, ErrType> {
+fn read_tickers(filename: &str) -> Result<HashSet<String>, ErrType> {
     let mut tickers = HashSet::new();
-    let file =  File::open(file_name).map_err(|e| ErrType::ReadError(format!("Ошибка при открытии файла {}. {}", file_name.to_string(), e.to_string())))?;
+    let file = File::open(filename)
+        .map_err(|e| ErrType::ReadError(format!("Ошибка при открытии файла {filename}. {e}")))?;
     let reader = BufReader::new(file);
     for line in reader.lines() {
-        let line = line.map_err(|e| ErrType::ReadError(format!("Ошибка при чтении файла {}. {}", file_name.to_string(), e.to_string())))?;
+        let line = line
+            .map_err(|e| ErrType::ReadError(format!("Ошибка при чтении файла {filename}. {e}")))?;
         tickers.insert(line);
     }
     Ok(tickers)
@@ -26,55 +29,63 @@ fn read_tickers(file_name: &str) -> Result<HashSet<String>, ErrType> {
 fn main() -> io::Result<()> {
     env_logger::init();
 
-    let listener = TcpListener::bind("127.0.0.1:8080")?;
+    let listener = TcpListener::bind("127.0.0.1:1111")?;
     listener.set_nonblocking(true)?;
-    log::info!("TCP сервер начал работу и слушает порт 8080");
+    log::info!("TCP сервер начал работу и слушает порт 1111");
 
     let args: Vec<String> = env::args().collect();
-    let filename: &str;
-    if args.len() < 2 {
-        filename = "tickers.txt";
-    }
-    else {
-        filename = args[1].as_str();
-    }
+
+    let filename = if args.len() < 2 {
+        "tickers.txt"
+    } else {
+        args[1].as_str()
+    };
 
     let tickers = match read_tickers(filename) {
         Ok(tickers) => tickers,
         Err(e) => {
-            log::error!("Не удалось прочитать список котировок из файла {}", filename);
+            log::error!("Не удалось прочитать список котировок из файла {filename}",);
             return Err(e.into());
         }
     };
 
     let stoper = common_lib::ctrlc::ctrlc_handler()?;
 
-    let mut stocks = stock_quotes_handler::QuoteHandler::new(&tickers);
+    let mut stocks = QuoteHandler::new(&tickers);
 
-    let mut senders: LinkedList<ServerWriter> = LinkedList::new();
+    let mut senders: Vec<ServerWriter> = Vec::new();
 
+    // Ловим новые tcp соединения и каждое соединение обрабатываем в методе handle_client
     for stream in listener.incoming() {
         if stoper.load(Ordering::Acquire) {
             log::info!("Остановка работы tcp сервера");
             break;
         }
+        senders
+            .iter()
+            .filter(|s| s.stop.load(Ordering::Acquire))
+            .for_each(|s| stocks.remove_channel(&s.remote_address));
+        senders.retain(|s| !s.stop.load(Ordering::Acquire));
+
         match stream {
             Ok(stream) => {
-                match tcp_server::handle_client(stream, stocks.get_receiver()) {
+                // Поскольку обработка соединение не долгая все делается в одном потоке
+                match tcp_server::handle_client(stream, &mut stocks) {
                     Ok(sender) => {
-                        senders.push_back(sender);
-                    },
+                        // Сохраняем соединение, что бы при остановке сервера корректно их закрыть
+                        senders.push(sender);
+                    }
                     Err(e) => {
-                        log::error!("Не удалось установить соединение. Ошибка {}", e);
+                        log::error!("Не удалось установить соединение. Ошибка {e}");
                         continue;
                     }
                 }
             }
             Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
                 // Если нет соединение тогда спать. Нужно, что бы отлавливать ctrlc команды.
-                thread::sleep(Duration::from_millis(100));
+                thread::sleep(TCP_CONNECTION_WAIT_PERIOD);
             }
-            Err(e) => eprintln!("Connection failed: {}", e),
+            Err(e) => eprintln!("Connection failed: {e}"),
         }
     }
 
@@ -82,7 +93,7 @@ fn main() -> io::Result<()> {
         match sender.stop() {
             Ok(_) => (),
             Err(e) => {
-                log::error!("{}", e.to_string());
+                log::error!("{e}");
             }
         }
     }

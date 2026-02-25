@@ -1,18 +1,17 @@
-use std::str::FromStr;
-use std::fmt::Display;
 use crate::errors::ErrType;
 use serde::{Deserialize, Serialize};
+use std::fmt::Display;
+use std::str::FromStr;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StockQuote {
     pub ticker: String,
-    pub price: u32, // сделал целым числом что бы не мучиться с колчиством знаков после запятой. Буду считать что хранимая 12345 число интерпретируется как 123.45
+    pub price: u32, // сделал целым числом, что бы не мучиться с количеством знаков после запятой. Буду считать что хранимая 12345 число интерпретируется как 123.45
     pub volume: u32,
-    pub timestamp: u64,
+    pub timestamp: i64,
 }
 
 impl StockQuote {
-    // Или бинарная сериализация
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(self.ticker.as_bytes());
@@ -38,13 +37,24 @@ impl FromStr for StockQuote {
                 timestamp: parts[3].parse()?,
             })
         } else {
-            Err(ErrType::NotSupported(format!("Не удалось прочитать котировку из строку {}",  s.to_string())))
+            Err(ErrType::NotSupported(format!(
+                "Не удалось прочитать котировку из строку {}",
+                s.to_string()
+            )))
         }
     }
 }
 
 impl Display for StockQuote {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}|{}.{:02}|{}|{}", self.ticker, self.price / 100, self.price % 100, self.volume, self.timestamp)
+        write!(
+            f,
+            "{}|{}.{:02}|{}|{}",
+            self.ticker,
+            self.price / 100,
+            self.price % 100,
+            self.volume,
+            self.timestamp
+        )
     }
 }

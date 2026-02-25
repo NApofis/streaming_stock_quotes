@@ -1,0 +1,6 @@
+AAPL
+ICE
+BDX
+WM
+ECL
+ITW
