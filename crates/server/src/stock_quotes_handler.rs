@@ -82,10 +82,10 @@ impl QuoteHandler {
                     Ok(subscribers) => {
                         subscribers
                             .iter()
-                            .for_each(|(_, s)| match s.send(data.clone()) {
+                            .for_each(|(_, s)| match s.try_send(data.clone()) {
                                 Ok(_) => {}
                                 Err(e) => {
-                                    log::error!("{:?}", e)
+                                    log::warn!("Не удалось отправить сообщение по каналу. {:?}", e)
                                 }
                             })
                     }
@@ -192,51 +192,3 @@ impl QuoteHandler {
         }
     }
 }
-
-// #[cfg(test)]
-// mod tests {
-//     use std::collections::HashSet;
-//     use std::thread::sleep;
-//     use std::time::Duration;
-//     use crate::stock_quotes_handler::QuoteHandler;
-//
-//     fn get_tickers() -> HashSet<String> {
-//         HashSet::from(["AAPL".to_string(), "MSFT".to_string(), "NEW".to_string()])
-//     }
-//
-//     #[test]
-//     fn test_start_stop_generate_quote() {
-//         let (obj, thr) = QuoteHandler::new(&get_tickers());
-//         {
-//             let reader = obj.inner.read().unwrap();
-//             assert!(reader.stocks.iter().find(|s| s.ticker.as_str() == "AAPL").is_some());
-//             assert!(reader.stocks.iter().find(|s| s.ticker.as_str() == "MSFT").is_some());
-//             assert!(reader.stocks.iter().find(|s| s.ticker.as_str() == "NEWWW").is_none());
-//         }
-//
-//         let mut tr = get_tickers();
-//         tr.insert(String::from("GGL"));
-//         let value = obj.read(&tr).unwrap();
-//
-//         sleep(Duration::from_secs(2));
-//         let value2 = obj.read(&tr).unwrap();
-//
-//         assert_eq!(value.len(), 3);
-//         assert_eq!(value.len(), value2.len());
-//         assert_eq!(value[0].ticker, value2[0].ticker);
-//         assert_eq!(value[1].ticker, value2[1].ticker);
-//         assert_eq!(value[2].ticker, value2[2].ticker);
-//
-//         assert_ne!(value[0].timestamp, value2[0].timestamp);
-//         assert_ne!(value[1].timestamp, value2[1].timestamp);
-//         assert_ne!(value[2].timestamp, value2[2].timestamp);
-//
-//         assert_ne!(value[0].price, value2[0].price);
-//         assert_ne!(value[0].volume, value2[0].volume);
-//
-//         obj.stop();
-//         let empty_result = obj.read(&tr).unwrap();
-//         assert!(empty_result.is_empty());
-//         thr.join().unwrap();
-//     }
-// }

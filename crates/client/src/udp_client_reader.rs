@@ -1,10 +1,7 @@
 use chrono::{DateTime, Utc};
 use common_lib::errors::ErrType;
 use common_lib::stock_quote::StockQuote;
-use common_lib::{
-    DATA_REQUEST, PING_PONG_WAIT_PERIOD, PING_REQUEST, PONG_REQUEST, QUOTE_GENERATOR_PERIOD,
-    QUOTES_WAIT_PERIOD, UDP_CONNECTION_WAIT_PERIOD,
-};
+use common_lib::{DATA_REQUEST, PING_REQUEST, PONG_REQUEST, QUOTE_GENERATOR_PERIOD, QUOTES_WAIT_PERIOD, PING_SEND_PERIOD, MAX_NUMBER_IGNORED_PING};
 use std::collections::HashSet;
 use std::io;
 use std::net::UdpSocket;
@@ -134,7 +131,7 @@ impl ClientReader {
                         );
                     } else if &buf[..PONG_REQUEST.len()] == PONG_REQUEST {
                         log::info!(
-                            "От {from} пришел запрос {}",
+                            "От {from} пришел {} запрос",
                             String::from_utf8_lossy(&buf[..n])
                         );
                         self.expect_pong.store(false, Ordering::Release);
@@ -191,7 +188,6 @@ impl ClientReader {
                                     quote.ticker, date_time_string, quote.volume, quote.price
                                 );
                             }
-                            println!("---");
                         }
                         Err(e) => {
                             log::error!(
@@ -246,33 +242,45 @@ impl ClientReader {
 
         Ok(thread::spawn(move || {
             let mut remote_server_socket = String::new();
+            let mut fail = 0;
             loop {
-                if server_address_set.load(Ordering::Acquire) && remote_server_socket.is_empty() {
-                    if let Ok(s) = server_address.lock() {
-                        remote_server_socket = s.clone();
-                    } else {
-                        log::warn!("Неизвестен адрес удаленный машины что бы отправить PING");
-                        continue;
-                    }
-                } else {
-                    // Пока адреса нет тогда засыпаем и чекам по таймауту
-                    thread::sleep(UDP_CONNECTION_WAIT_PERIOD);
-                    continue;
-                }
-
-                // Если переменная все еще установлена то значит pong не пришел и можно закрывать работу
-                if local_expect_pong.load(Ordering::Acquire) {
-                    log::error!(
-                        "Сервер {remote_server_socket} не прислал PONG в течении {} секунды. Соединение будет закрыто.",
-                        UDP_CONNECTION_WAIT_PERIOD.as_secs()
-                    );
-                    local_stoper.store(true, Ordering::Release);
-                }
 
                 if local_stoper.load(Ordering::Acquire) {
                     log::info!("Завершаем отправлять ping запросы");
                     break;
                 };
+
+                if remote_server_socket.is_empty() {
+                    if server_address_set.load(Ordering::Acquire) {
+                        if let Ok(s) = server_address.lock() {
+                            remote_server_socket = s.clone();
+                        } else {
+                            log::warn!("Неизвестен адрес удаленный машины что бы отправить PING");
+                            continue;
+                        }
+                    } else {
+                        // Пока адреса нет тогда засыпаем и чекам по таймауту
+                        thread::sleep(PING_SEND_PERIOD);
+                        continue;
+                    }
+                }
+
+
+                // Если переменная все еще установлена то значит pong не пришел и можно закрывать работу
+                if local_expect_pong.load(Ordering::Acquire) {
+                    log::info!(
+                        "Сервер {remote_server_socket} не прислал PONG в течении {} секунды.",
+                        PING_SEND_PERIOD.as_secs()
+                    );
+                    fail += 1;
+                    if fail >= MAX_NUMBER_IGNORED_PING {
+                        log::error!("Сервер {remote_server_socket} не ответил на 3 PING сообщения. Соединение будет закрыто.");
+                        local_stoper.store(true, Ordering::Release);
+                        continue;
+                    }
+                } else {
+                    fail = 0;
+                }
 
                 let Ok(_) = copy_socket.send_to(PING_REQUEST, remote_server_socket.clone()) else {
                     log::error!(
@@ -283,7 +291,7 @@ impl ClientReader {
                 };
 
                 local_expect_pong.store(true, Ordering::Release);
-                thread::sleep(PING_PONG_WAIT_PERIOD);
+                thread::sleep(PING_SEND_PERIOD);
             }
         }))
     }

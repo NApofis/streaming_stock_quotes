@@ -2,7 +2,7 @@ use common_lib::errors::ErrType;
 use common_lib::errors::ErrType::NoAccess;
 use common_lib::stock_quote::StockQuote;
 use common_lib::{
-    DATA_REQUEST, PING_PONG_WAIT_PERIOD, PING_REQUEST, PONG_REQUEST, UDP_SERVER_RECEIVE_PERIOD,
+    DATA_REQUEST, PING_WAIT_PERIOD, PING_REQUEST, PONG_REQUEST, UDP_SERVER_RECEIVE_PERIOD,
 };
 use crossbeam_channel::{Receiver, RecvTimeoutError};
 use std::io;
@@ -109,17 +109,15 @@ impl ServerWriter {
         let mut buf = [0u8; 2048];
 
         loop {
+            // Завершение когда долго не было ping от клиента
+            if Instant::now() - ping_time > PING_WAIT_PERIOD {
+                log::warn!("Разрываем соединение с {addr} потому что не получали ping больше {} сек", PING_WAIT_PERIOD.as_secs());
+                stop.store(true, Ordering::Release);
+            }
+
             // Завершение когда вызывали метод stop
             if stop.load(Ordering::Acquire) {
-                log::info!("Закрываем соединение с {}", addr);
-                break;
-            }
-            // Завершение когда долго не было ping от клиента
-            if Instant::now() - ping_time > PING_PONG_WAIT_PERIOD {
-                log::warn!(
-                    "Разрываем соединение с {} потому что не получали ping больше 5 сек",
-                    addr
-                );
+                log::info!("Закрываем соединение с {addr}");
                 break;
             }
 
