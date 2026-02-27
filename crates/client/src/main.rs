@@ -23,7 +23,10 @@ struct Cli {
     tickers_file: PathBuf,
 
     #[arg(long)]
-    udp_port: u16,
+    client_ip: String,
+
+    #[arg(long)]
+    client_port: u16,
 
     #[arg(long)]
     server_ip: String,
@@ -98,7 +101,7 @@ fn main() -> Result<()> {
     };
 
     // Отправляем сообщение, что бы начать получать котировки
-    let address_udp = format!("127.0.0.1:{}", &cli.udp_port);
+    let address_udp = format!("{}:{}", &cli.client_ip, &cli.client_port);
     let request = format!("{STREAM_REQUEST} udp://{address_udp} {tickers_join}\n");
     let Ok(_) = stream.write_all(request.as_bytes()) else {
         bail!("Не удалось отправить сообщение {request} серверу")

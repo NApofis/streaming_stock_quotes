@@ -15,7 +15,7 @@ cargo run --bin server crates/server/tickers.txt
 #### Команда для запуска клиента
 
 ``` rust
-cargo run --bin client -- --udp-port 1112 --server-ip 127.0.0.1 --server-port 1111 --tickers-file crates/client/tickers1.txt 
+cargo run --bin client -- --client-port 1112 --client-ip 127.0.0.1 --server-ip 127.0.0.1 --server-port 1111 --tickers-file crates/client/tickers1.txt 
 ```
 ! Команду подготовлена с учетом выполнения из папки `streaming_stock_quotes`
 
