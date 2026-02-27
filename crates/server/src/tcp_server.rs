@@ -29,16 +29,23 @@ pub fn handle_client(
         }
     };
 
-    let mut write = |text: &str| {
-        let _ = writer.write_all(text.as_bytes());
-        let _ = writer.flush();
+    let mut write = |text: &str| -> Result<(), ErrType> {
+        let Ok(_) =writer.write_all(text.as_bytes()) else {
+            log::error!("Не удалось отправить запрос {text}");
+            return Err(ConnectionError(format!("Ошибка отправки запроса {text}")));
+        };
+        let Ok(_) =writer.flush() else {
+            log::error!("Не удалось опустошить буфер для отправки запроса {text}");
+            return Err(ConnectionError(format!("Не удалось опустошить буфер для отправки запроса {text}")));
+        };
+        Ok(())
     };
 
     let mut reader = BufReader::new(stream);
     let sender: ServerWriter;
     let mut line = String::new();
 
-    write("Вы подключились к бирже!\n"); // Приветственное сообщение, для работы не нужно
+    write("Вы подключились к бирже!\n")?; // Приветственное сообщение, для работы не нужно
 
     loop {
         line.clear();
@@ -56,80 +63,73 @@ pub fn handle_client(
                 let mut parts = input.split_whitespace();
                 match parts.next() {
                     Some(STREAM_REQUEST) => {
-                        if let Some(host_ports) = parts.next() {
-                            let host_parts = host_ports.split(':').collect::<Vec<&str>>();
+                        let Some(address) = parts.next() else {
+                            log::warn!("В принятом запросе {input} отсутствует upd адрес");
+                            write("ERROR: Не передан адрес для udp соединения\n")?;
+                            continue;
+                        };
 
-                            if host_parts[0] != "udp" {
-                                log::warn!(
+                        let Some(host_port) = address.strip_prefix("udp://") else {
+                            log::warn!(
                                     "В принятом запросе {input} отсутствует тип соединения udp"
                                 );
-                                write("ERROR: Не передан тип соединения udp\n");
-                                continue;
-                            }
+                            write("ERROR: Не передан тип соединения udp\n")?;
+                            continue;
+                        };
 
-                            let host = host_parts[1][2..].to_string();
-                            let port = host_parts[2].to_string();
+                        let Some((host, port)) = host_port.split_once(':') else {
+                            log::warn!("В принятом запросе {input} отсутствует адрес и порт");
+                            write("ERROR: Не передан адрес и порт\n")?;
+                            continue;
+                        };
 
-                            if host.is_empty() || port.is_empty() {
-                                log::warn!("В принятом запросе {input} отсутствует адрес и порт");
-                                write("ERROR: Не передан адрес и порт\n");
-                                continue;
-                            }
+                        let Some(tickers) = parts.next() else {
+                            log::warn!(
+                                "В принятом запросе {input} отсутствует список котировок"
+                            );
+                            write("ERROR: Не передан адрес для udp соединения\n")?;
+                            continue;
+                        };
 
-                            if let Some(tickers) = parts.next() {
-                                // Список котировок
-                                let tickers_vec = tickers
-                                    .split(',')
-                                    .map(|x| x.to_string())
-                                    .collect::<Vec<String>>();
-                                if tickers_vec.is_empty() {
-                                    log::warn!(
-                                        "В принятом запросе {input} отсутствует список котировок"
-                                    );
-                                    write("ERROR: Не передан список котировок\n");
-                                    continue;
-                                } else {
-                                    // Отвечаем что все ок что бы клиент запуска udp. И сами тоже создаем udp сокет
-                                    log::debug!("Пришел корректный запрос {input}");
-                                    write(common_lib::OK_REQUEST);
-                                    let address = format!("{host}:{port}");
-
-                                    let Some(receiver) = stocks.create_channel(&address) else {
-                                        write(
-                                            "ERROR: Произошла ошибка сервера при создании канала свзи",
-                                        );
-                                        return Err(ErrType::NoAccess(
-                                            "Не удалось создать канал для передачи котировок"
-                                                .to_string(),
-                                        ));
-                                    };
-                                    sender = ServerWriter::start(address, tickers_vec, receiver)?;
-                                    break;
-                                }
-                            } else {
-                                log::warn!(
-                                    "В принятом запросе {input} отсутствует список котировок"
-                                );
-                                write("ERROR: Не передан адрес для udp соединения\n");
-                                continue;
-                            }
-                        } else {
-                            log::warn!("В принятом запросе {input} отсутствует upd адрес");
-                            write("ERROR: Не передан адрес для udp соединения\n");
+                        // Список котировок
+                        let tickers_vec = tickers
+                            .split(',')
+                            .map(|x| x.to_string())
+                            .collect::<Vec<String>>();
+                        if tickers_vec.is_empty() {
+                            log::warn!(
+                                "В принятом запросе {input} отсутствует список котировок"
+                            );
+                            write("ERROR: Не передан список котировок\n")?;
                             continue;
                         }
+                        // Отвечаем что все ок что бы клиент запуска udp. И сами тоже создаем udp сокет
+                        log::debug!("Пришел корректный запрос {input}");
+                        write(common_lib::OK_REQUEST)?;
+                        let address = format!("{host}:{port}");
+
+                        let Some(receiver) = stocks.create_channel(&address) else {
+                            write(
+                                "ERROR: Произошла ошибка сервера при создании канала свзи",
+                            )?;
+                            return Err(ErrType::NoAccess(
+                                "Не удалось создать канал для передачи котировок"
+                                    .to_string(),
+                            ));
+                        };
+                        sender = ServerWriter::start(address, tickers_vec, receiver)?;
+                        break;
                     }
                     _ => {
                         log::warn!("Получена неизвестная команда {input}");
-                        write("ERROR: Получена неизвестная команда\n")
+                        write("ERROR: Получена неизвестная команда\n")?
                     }
                 };
             }
             Err(e) => {
                 log::error!("Произошла ошибка в соединение {:?}", e);
                 return Err(ConnectionError(format!(
-                    "Произошла ошибка в соединении {:?}",
-                    e
+                    "Произошла ошибка в соединении {e:?}",
                 )));
             }
         }
